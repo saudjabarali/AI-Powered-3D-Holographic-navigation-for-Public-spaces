@@ -1,0 +1,26 @@
+# Virtual Environment
+venv/
+env/
+.env
+
+# Video files
+*.mp4
+*.avi
+*.mov
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# VS Code settings
+.vscode/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# API keys / secrets
+config.py
+secrets.py
+*.key
