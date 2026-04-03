@@ -296,19 +296,193 @@ def extract_destination(text):
     return None
 
 # ──────────────────────────────────────────────
-# IMPROVEMENT 3 — Hologram sync delay before video
-# The 2.5 s gap gives you time to tap play on the
-# Winzo 5D Displayer app so both displays start together
+# ADB HOLOGRAM SYNC
+#
+# The Winzo 5D Displayer app shows a numbered video list.
+# Each destination maps to a specific row in that list.
+# ADB taps the correct row automatically when a destination
+# is spoken — both the monitor video and hologram fan
+# start at exactly the same moment.
+#
+# HOW TO SET UP (one-time, ~10 minutes):
+#
+#   1. Install ADB on Windows:
+#      Open PowerShell and run:
+#        winget install Google.PlatformTools
+#      Restart VS Code after so PATH is updated.
+#      Verify with:  adb version
+#
+#   2. Enable USB Debugging on your phone:
+#      Settings → About Phone → tap Build Number 7 times
+#      → Developer Options → enable USB Debugging
+#
+#   3. Connect phone to laptop via USB data cable.
+#      Accept the "Allow USB Debugging?" popup on your phone.
+#      Verify with:  adb devices
+#      (should show one device, not "unauthorized")
+#
+#   4. Calibrate row Y-coordinates (if rows don't tap right):
+#      Your screen resolution may differ slightly from the
+#      values pre-filled below. Run this to get exact coords:
+#
+#        adb shell getevent -l
+#
+#      Then physically tap each row in the Winzo app one by one.
+#      Read the ABS_MT_POSITION_Y hex value, convert to decimal,
+#      and update the Y values in WINZO_TAP_COORDS below.
+#      X stays at 360 (horizontal centre) for all rows.
+#
+#   5. Test with the calibration mode:
+#      Set RUN_TAP_CALIBRATION = True, run the script,
+#      say a destination — watch the correct row get tapped.
+#      Then set RUN_TAP_CALIBRATION = False.
+#
 # ──────────────────────────────────────────────
+# YOUR APP VIDEO LIST (from screenshot):
+#   01.ARVRLAB      02.AUDITORM     03.CLSROOM1
+#   04.CLSROOM2     05.CLSROOM3     06.DBMSLAB
+#   07.DLLAB        08.EMRGNCY      09.HODOFFIC
+#   10.OOPSLAB      11.RESTROOM     12.STFHALL1
+#   13.STFHALL2
+# ──────────────────────────────────────────────
+
+import subprocess
+
+# ── CALIBRATION MODE ────────────────────────────
+# Set True to test tap coordinates, False for normal use
+RUN_TAP_CALIBRATION = False
+CALIBRATION_DESTINATION = "ARVR Lab"   # destination to test when calibrating
+# ────────────────────────────────────────────────
+
+# ── ROW TAP COORDINATES ─────────────────────────
+# X = 360  (horizontal centre of screen, same for every row)
+# Y values calculated from your screenshot:
+#   Header bar ends ~148px. Row height ≈ 88px.
+#   Row N centre  =  148 + (N-1)*88 + 44
+#
+#   Row 1 → Y = 192    Row 2 → Y = 280    Row 3 → Y = 368
+#   Row 4 → Y = 456    Row 5 → Y = 544    Row 6 → Y = 632
+#   Row 7 → Y = 720    Row 8 → Y = 808    Row 9 → Y = 896
+#   Row 10 → Y = 984   Row 11 → Y = 1072  Row 12 → Y = 1160
+#   Row 13 → Y = 1248
+#
+# If your phone has a different resolution, adjust the Y values
+# using:  adb shell getevent -l  (see Step 4 above)
+# ────────────────────────────────────────────────
+WINZO_TAP_COORDS = {
+    # destination name       → (X,    Y)    exact values from adb getevent
+    "ARVR Lab":              (1434,   465),  # 01.ARVRLAB
+    "Auditorium":            (1218,   732),  # 02.AUDITORM
+    "Classroom 1":           (1321,   944),  # 03.CLSROOM1
+    "Classroom 2":           (1172,  1180),  # 04.CLSROOM2
+    "Classroom 3":           (1434,  1410),  # 05.CLSROOM3
+    "DBMS Lab":              ( 950,  1648),  # 06.DBMSLAB
+    "Deep Learning Lab":     (1292,  1884),  # 07.DLLAB
+    "Emergency Exit":        (1235,  2091),  # 08.EMRGNCY
+    "HOD Office":            (1218,  2376),  # 09.HODOFFIC
+    "OOPS Lab":              (1184,  2560),  # 10.OOPSLAB
+    "Restroom":              (1457,  2862),  # 11.RESTROOM
+    "Staff Hall 1":          (1321,  3010),  # 12.STFHALL1
+    "Staff Hall 2":          (1059,  3261),  # 13.STFHALL2
+}
+# NOTE: Hall, Corridor A, and Entrance have no hologram video
+# so they are not in the list — that's correct.
+
+
+def _adb_check():
+    """Returns True if ADB can see a connected device, False otherwise."""
+    try:
+        result = subprocess.run(
+            ["adb", "devices"],
+            capture_output=True, text=True, timeout=3
+        )
+        lines = [l.strip() for l in result.stdout.splitlines()
+                 if l.strip() and "List of devices" not in l]
+        return any("device" in l for l in lines)
+    except FileNotFoundError:
+        return False   # adb not installed
+    except Exception:
+        return False
+
+
+def _adb_tap(destination):
+    """
+    Looks up the correct row coordinates for this destination
+    and sends a tap to the Winzo app list.
+    Runs in a background thread — never blocks audio.
+    """
+    if destination not in WINZO_TAP_COORDS:
+        print(f"[ADB] No tap coordinates for '{destination}' — skipping fan trigger.")
+        return
+
+    x, y = WINZO_TAP_COORDS[destination]
+
+    def _do_tap():
+        try:
+            subprocess.run(
+                ["adb", "shell", "input", "tap", str(x), str(y)],
+                timeout=3, capture_output=True
+            )
+            print(f"[ADB] Tapped '{destination}' row at ({x}, {y}) in Winzo app ✓")
+        except FileNotFoundError:
+            print("[ADB] adb not found — is Google Platform Tools installed?")
+        except Exception as e:
+            print(f"[ADB] Tap failed: {e}")
+
+    threading.Thread(target=_do_tap, daemon=True).start()
+
+
+# ── Startup check ────────────────────────────────
+_ADB_READY = _adb_check()
+if _ADB_READY:
+    print("[ADB] Phone detected ✓  Hologram fan will sync automatically.")
+else:
+    print("[ADB] No phone detected — check USB cable & USB Debugging.")
+    print("      Hologram fan will NOT be auto-triggered this session.")
+
+# ── Calibration helper ───────────────────────────
+if RUN_TAP_CALIBRATION and _ADB_READY:
+    dest = CALIBRATION_DESTINATION
+    x, y = WINZO_TAP_COORDS.get(dest, (360, 192))
+    print(f"\n[CALIBRATION] Testing tap for '{dest}' → ({x}, {y}) in 3 seconds...")
+    print("              Watch your phone — the correct row should be tapped.")
+    time.sleep(3)
+    _adb_tap(dest)
+    time.sleep(1)
+    print("[CALIBRATION] Done.")
+    print("              If the wrong row was tapped, adjust its Y value in")
+    print("              WINZO_TAP_COORDS and run again.")
+    print("              If correct, set RUN_TAP_CALIBRATION = False.\n")
+
+
 def play_video(destination):
-    if destination in video_map:
-        video_path = os.path.join("videos", video_map[destination])
-        if os.path.exists(video_path):
-            speak("Launching holographic display.")
-            time.sleep(2.5)          # <-- tap play on Winzo app during this gap
-            os.startfile(video_path) # monitor video starts right after
-        else:
-            speak(f"Video file for {destination} not found.")
+    """
+    Fires both displays at the same instant:
+      1. ADB taps the correct video row in the Winzo app
+         → hologram fan starts playing immediately
+      2. os.startfile plays the matching video on the monitor
+    No manual interaction needed.
+    """
+    if destination not in video_map:
+        return
+
+    video_path = os.path.join("videos", video_map[destination])
+    if not os.path.exists(video_path):
+        speak(f"Video file for {destination} not found.")
+        return
+
+    speak("Launching holographic display.")
+    time.sleep(0.5)   # let the spoken phrase finish cleanly
+
+    # ── Both displays fire simultaneously ─────────────────────────
+    if _ADB_READY:
+        _adb_tap(destination)          # hologram fan ← ADB tap on Winzo row
+
+    os.startfile(video_path)           # monitor video ← plays right after
+    # ──────────────────────────────────────────────────────────────
+
+    if not _ADB_READY:
+        print(f"[ADB] Phone not connected — tap '{destination}' row in Winzo manually.")
 
 # ──────────────────────────────────────────────
 # IMPROVEMENT 2 — Main loop (keeps running until "quit")
@@ -330,8 +504,10 @@ while True:
         text = recognizer.recognize_google(audio)
         print(f"You said: {text}")
 
-        # Exit command
-        if "quit" in text.lower() or "exit" in text.lower():
+        # Exit command — only "quit" or the single word "exit" stops the system.
+        # Saying "emergency exit" still navigates correctly.
+        text_stripped = text.lower().strip()
+        if "quit" in text_stripped or text_stripped == "exit":
             speak("Shutting down navigation system. Goodbye.")
             break
 
