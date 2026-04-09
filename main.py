@@ -370,20 +370,21 @@ CALIBRATION_DESTINATION = "ARVR Lab"   # destination to test when calibrating
 # using:  adb shell getevent -l  (see Step 4 above)
 # ────────────────────────────────────────────────
 WINZO_TAP_COORDS = {
-    # destination name       → (X,    Y)    exact values from adb getevent
-    "ARVR Lab":              (1434,   465),  # 01.ARVRLAB
-    "Auditorium":            (1218,   732),  # 02.AUDITORM
-    "Classroom 1":           (1321,   944),  # 03.CLSROOM1
-    "Classroom 2":           (1172,  1180),  # 04.CLSROOM2
-    "Classroom 3":           (1434,  1410),  # 05.CLSROOM3
-    "DBMS Lab":              ( 950,  1648),  # 06.DBMSLAB
-    "Deep Learning Lab":     (1292,  1884),  # 07.DLLAB
-    "Emergency Exit":        (1235,  2091),  # 08.EMRGNCY
-    "HOD Office":            (1218,  2376),  # 09.HODOFFIC
-    "OOPS Lab":              (1184,  2560),  # 10.OOPSLAB
-    "Restroom":              (1457,  2862),  # 11.RESTROOM
-    "Staff Hall 1":          (1321,  3010),  # 12.STFHALL1
-    "Staff Hall 2":          (1059,  3261),  # 13.STFHALL2
+    # destination name       -> (X,   Y)   from Android 11 pointer location
+    "Welcome":               (111,  205),  # 01.AAWELCOME
+    "ARVR Lab":              (104,  286),  # 02.ARVRLAB
+    "Auditorium":            (128,  391),  # 03.AUDITORM
+    "Classroom 1":           (137,  492),  # 04.CLSROOM1
+    "Classroom 2":           (135,  600),  # 05.CLSROOM2
+    "Classroom 3":           (145,  692),  # 06.CLSROOM3
+    "DBMS Lab":              (147,  798),  # 07.DBMSLAB
+    "Deep Learning Lab":     (126,  876),  # 08.DLLAB
+    "Emergency Exit":        (123,  961),  # 09.EMRGNCY
+    "HOD Office":            (148, 1065),  # 10.HODOFFIC
+    "OOPS Lab":              (124, 1165),  # 11.OOPSLAB
+    "Restroom":              (165, 1253),  # 12.RESTROOM
+    "Staff Hall 1":          (132, 1191),  # 13.STFHALL1 (after scroll)
+    "Staff Hall 2":          (123, 1286),  # 14.STFHALL2 (after scroll)
 }
 # NOTE: Hall, Corridor A, and Entrance have no hologram video
 # so they are not in the list — that's correct.
@@ -405,25 +406,43 @@ def _adb_check():
         return False
 
 
+# ── Winzo package name ──────────────────────────
+# Find yours by running:  adb shell pm list packages | findstr -i 5d
+# Then paste the result here e.g. "com.example.5ddisplayer"
+WINZO_PACKAGE = "com.zxb.yf.Z3"   # most common 5D displayer package name
+# ─────────────────────────────────────────────────
+
+
 def _adb_tap(destination):
     """
-    Looks up the correct row coordinates for this destination
-    and sends a tap to the Winzo app list.
-    Runs in a background thread — never blocks audio.
+    1. Brings the Winzo app to the foreground (so the tap lands on it)
+    2. Waits a moment for the app to appear
+    3. Taps the correct video row
+    Runs in a background thread so it never blocks audio.
     """
     if destination not in WINZO_TAP_COORDS:
-        print(f"[ADB] No tap coordinates for '{destination}' — skipping fan trigger.")
+        print(f"[ADB] No tap coords for '{destination}' — skipping fan trigger.")
         return
 
     x, y = WINZO_TAP_COORDS[destination]
 
     def _do_tap():
         try:
+            # Step 1 — bring Winzo to foreground
+            subprocess.run(
+                ["adb", "shell", "monkey", "-p", WINZO_PACKAGE,
+                 "-c", "android.intent.category.LAUNCHER", "1"],
+                timeout=4, capture_output=True
+            )
+            # Step 2 — wait for app to appear on screen
+            time.sleep(1.5)
+
+            # Step 3 — tap the correct row
             subprocess.run(
                 ["adb", "shell", "input", "tap", str(x), str(y)],
                 timeout=3, capture_output=True
             )
-            print(f"[ADB] Tapped '{destination}' row at ({x}, {y}) in Winzo app ✓")
+            print(f"[ADB] Tapped '{destination}' row at ({x}, {y}) in Winzo app.")
         except FileNotFoundError:
             print("[ADB] adb not found — is Google Platform Tools installed?")
         except Exception as e:
@@ -455,13 +474,45 @@ if RUN_TAP_CALIBRATION and _ADB_READY:
     print("              If correct, set RUN_TAP_CALIBRATION = False.\n")
 
 
+# Destinations that need a scroll before tapping (not visible on first screen)
+NEEDS_SCROLL = {"Staff Hall 1", "Staff Hall 2"}
+
+
+def _adb_run(cmd):
+    """Run a single adb shell command and wait for it."""
+    subprocess.run(["adb", "shell"] + cmd.split(),
+                   timeout=3, capture_output=True)
+
+
+def _tap_welcome():
+    """
+    Taps the welcome video row in Winzo so the hologram fan
+    returns to the looping welcome screen after each destination.
+    Scrolls back to top first to make sure row 01 is visible.
+    Runs in a background thread so it never blocks anything.
+    """
+    def _do():
+        # Scroll back to top so welcome row is visible
+        _adb_run("input swipe 400 400 400 800 300")
+        time.sleep(0.4)
+        subprocess.run(
+            ["adb", "shell", "input", "tap",
+             str(WINZO_TAP_COORDS["Welcome"][0]),
+             str(WINZO_TAP_COORDS["Welcome"][1])],
+            timeout=3, capture_output=True
+        )
+        print("[ADB] Returned hologram fan to Welcome screen")
+    threading.Thread(target=_do, daemon=True).start()
+
+
 def play_video(destination):
     """
-    Fires both displays at the same instant:
-      1. ADB taps the correct video row in the Winzo app
-         → hologram fan starts playing immediately
-      2. os.startfile plays the matching video on the monitor
-    No manual interaction needed.
+    Sequence:
+      1. ADB tap fires FIRST (before anything else) — no thread, no delay
+      2. Terminal shows the row number as confirmation
+      3. Voice says "Launching holographic display"
+      4. Monitor video plays
+      5. Background thread waits for video to end then taps Welcome
     """
     if destination not in video_map:
         return
@@ -471,18 +522,81 @@ def play_video(destination):
         speak(f"Video file for {destination} not found.")
         return
 
+    # Video duration (seconds) — update to match your actual video lengths
+    VIDEO_DURATION = {
+        "ARVR Lab":          10,
+        "Auditorium":        10,
+        "Classroom 1":       10,
+        "Classroom 2":       10,
+        "Classroom 3":       10,
+        "DBMS Lab":          10,
+        "Deep Learning Lab": 10,
+        "Emergency Exit":    10,
+        "HOD Office":        10,
+        "OOPS Lab":          10,
+        "Restroom":          10,
+        "Staff Hall 1":      10,
+        "Staff Hall 2":      10,
+    }
+
+    # Row number for terminal display
+    row_number = {
+        "ARVR Lab":          "02", "Auditorium":        "03",
+        "Classroom 1":       "04", "Classroom 2":       "05",
+        "Classroom 3":       "06", "DBMS Lab":          "07",
+        "Deep Learning Lab": "08", "Emergency Exit":    "09",
+        "HOD Office":        "10", "OOPS Lab":          "11",
+        "Restroom":          "12", "Staff Hall 1":      "13",
+        "Staff Hall 2":      "14",
+    }
+    row      = row_number.get(destination, "??")
+    duration = VIDEO_DURATION.get(destination, 10)
+    needs_scroll = destination in NEEDS_SCROLL
+
+    # ── STEP 1: ADB tap fires RIGHT NOW, synchronously, before anything else ──
+    # This runs before pyttsx3 touches the audio device so nothing can block it
+    if _ADB_READY and destination in WINZO_TAP_COORDS:
+        try:
+            if needs_scroll:
+                # Scroll list down first so Staff Hall rows become visible
+                subprocess.run(
+                    ["adb", "shell", "input", "swipe",
+                     "400", "800", "400", "400", "300"],
+                    timeout=4
+                )
+                time.sleep(0.5)
+
+            x, y = WINZO_TAP_COORDS[destination]
+            result = subprocess.run(
+                ["adb", "shell", "input", "tap", str(x), str(y)],
+                timeout=4, capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                print(f"[ADB] Tapped row {row} ({destination}) at ({x},{y}) OK")
+            else:
+                print(f"[ADB] Tap error: {result.stderr.strip()}")
+        except Exception as e:
+            print(f"[ADB] Tap failed: {e}")
+
+    # ── STEP 2: Terminal prompt (confirmation for you) ─────────────────────────
+    print("")
+    print("=" * 42)
+    print(f"  HOLOGRAM  >>  ROW {row}  —  {destination}")
+    print("=" * 42)
+    print("")
+
+    # ── STEP 3 + 4: Speak then play monitor video ──────────────────────────────
     speak("Launching holographic display.")
-    time.sleep(0.5)   # let the spoken phrase finish cleanly
+    os.startfile(video_path)
 
-    # ── Both displays fire simultaneously ─────────────────────────
-    if _ADB_READY:
-        _adb_tap(destination)          # hologram fan ← ADB tap on Winzo row
+    # ── STEP 5: After video ends, return hologram fan to welcome loop ──────────
+    def _return_to_welcome():
+        time.sleep(duration + 1)
+        _tap_welcome()
+        print("[Hologram] Returned to welcome screen")
 
-    os.startfile(video_path)           # monitor video ← plays right after
-    # ──────────────────────────────────────────────────────────────
+    threading.Thread(target=_return_to_welcome, daemon=True).start()
 
-    if not _ADB_READY:
-        print(f"[ADB] Phone not connected — tap '{destination}' row in Winzo manually.")
 
 # ──────────────────────────────────────────────
 # IMPROVEMENT 2 — Main loop (keeps running until "quit")
@@ -490,6 +604,13 @@ def play_video(destination):
 # ──────────────────────────────────────────────
 print("System Ready.")
 speak("Indoor navigation system ready. Say your destination.")
+
+# Tap welcome video row at startup so hologram fan starts looping immediately
+if _ADB_READY:
+    time.sleep(1)
+    _tap_welcome()
+    print("[Hologram] Welcome screen started on hologram fan")
+
 
 while True:
     try:
