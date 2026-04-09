@@ -524,19 +524,19 @@ def play_video(destination):
 
     # Video duration (seconds) — update to match your actual video lengths
     VIDEO_DURATION = {
-        "ARVR Lab":          10,
-        "Auditorium":        10,
-        "Classroom 1":       10,
-        "Classroom 2":       10,
-        "Classroom 3":       10,
-        "DBMS Lab":          10,
-        "Deep Learning Lab": 10,
-        "Emergency Exit":    10,
-        "HOD Office":        10,
-        "OOPS Lab":          10,
+        "ARVR Lab":          13,
+        "Auditorium":        11,
+        "Classroom 1":       12,
+        "Classroom 2":       11,
+        "Classroom 3":       12,
+        "DBMS Lab":          12,
+        "Deep Learning Lab": 13,
+        "Emergency Exit":    14,
+        "HOD Office":        14,
+        "OOPS Lab":          12,
         "Restroom":          10,
-        "Staff Hall 1":      10,
-        "Staff Hall 2":      10,
+        "Staff Hall 1":      13,
+        "Staff Hall 2":      13,
     }
 
     # Row number for terminal display
