@@ -140,7 +140,7 @@ AI-Holographic-Navigation/
 
 ## Hardware Setup
 
-*Add your hardware setup image here.*
+
 
 ---
 
